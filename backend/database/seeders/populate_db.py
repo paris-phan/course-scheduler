@@ -4,6 +4,14 @@ from dotenv import load_dotenv
 import requests
 import logging
 from datetime import datetime
+import sys
+import os
+from huggingface_hub import InferenceClient
+
+client = InferenceClient(
+    provider="hf-inference",
+    api_key=os.environ["HF_TOKEN"],
+)
 '''
 Script for populating the the database from the coures from the SIS api.
 '''
@@ -23,6 +31,24 @@ def establish_connection():
         logging.ERROR(response.status_code)
 
     return data
+
+def scrape_for_prerequisites():
+    base_url = ""
+    
+
+    course_info = {
+        "course":{
+            "course_name": None,
+            "prerequisites": []
+        },
+        "prerequisites":{
+            "prerequisite_name": None,
+            "prerequisite_type": None,
+            "prerequisite_number": None,
+            "prerequisite_units": None,
+        }
+    }
+
 
 """ establishing connectiion and geting all the classe"""
 def insert_into_db(client,response):
@@ -89,6 +115,9 @@ def main():
     
 
 if __name__ == '__main__':
+
+    args = sys.argv[1:]
+
     main()
 
     
