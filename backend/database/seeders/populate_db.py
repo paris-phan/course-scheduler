@@ -84,7 +84,7 @@ def insert_into_db(client,response):
             "total_seats": course["class_capacity"],
             "last_updated": datetime.now().isoformat(),
             "units": course["units"],
-            "meeting_days_and_times": course["meetings"] 
+            "meeting_days_and_times": course["meetings"],
             "gened_attributes" : course["ge"]
         }
 
