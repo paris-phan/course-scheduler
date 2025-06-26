@@ -1,0 +1,6 @@
+[submodule "backend/course-data"]
+	path = backend/course-data
+	url = https://github.com/UVA-Course-Explorer/course-data
+[submodule "backend/database/course-data"]
+	path = backend/database/course-data
+	url = https://github.com/UVA-Course-Explorer/course-data
