@@ -28,6 +28,7 @@ def insert_into_db(client, term = 1252):
         "start_dt": "",
         "end_dt": "",
         "instructor": "",
+        "catalog_number": "",
     }
 
     
@@ -88,11 +89,13 @@ def insert_into_db(client, term = 1252):
                     "start_dt": "",
                     "end_dt": "",
                     "instructor": "",
+                    "catalog_number": "",
                 }
                 
                 # Extract course data
                 course_query["subject"] = course.get("subject", "")
-                course_query["id"] = course.get("catalog_number", "")  # Use catalog_number as the id
+                course_query["id"] = f"{course.get('subject', '')}-{course.get('catalog_number', '')}"  # Unique ID combining subject and catalog number
+                course_query["catalog_number"] = course.get("catalog_number", "")  # Just the catalog number
                 course_query["descr"] = course.get("descr", "")
                 course_query["units"] = course.get("units", "")
                 course_query["topic"] = course.get("topic", "")
