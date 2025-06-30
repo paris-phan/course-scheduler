@@ -1,0 +1,30 @@
+name: Daily Data Update
+run-name: Daily Course Data Update 
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Runs at midnight UTC every day
+  workflow_dispatch:  # Allows manual triggering
+
+permissions:
+  contents: write
+
+jobs:
+  daily_update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Setup Python
+        uses: actions/setup-python@v3
+        with:
+          python-version: '3.8'
+          
+      - name: Install Python Dependencies
+        run: 
+          pip3 install -r requirements.txt
+          
+      - name: Run Action Script
+        run: python3 action_script.py 1258  
+        
