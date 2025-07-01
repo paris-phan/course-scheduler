@@ -7,81 +7,63 @@ from dotenv import load_dotenv
 import re
 from pathlib import Path
 
-def scrape_all_courses(client, term = 1258):
-
-    #get all the courses from the database
-    base_url = f"https://louslist.org/search.php?Semester={term}"
-    # Navigate to the search page
-    url = base_url
+def scrap_course_links(client, term=1258):
+    # Use the direct search URL to get all classes for the semester
+    url = f"https://louslist.org/pagex.php?Type=Search&Semester={term}&iGroup=&iMnemonic=&iNumber=&iStatus=&iType=&iInstructor=&iBuilding=&iRoom=&iMode=&iDays=&iTime=&iDates=&iUnits=&iTitle=&iTopic=&iDescription=&iDiscipline=&iMinPosEnroll=&iMaxPosEnroll=&iMinCurEnroll=&iMaxCurEnroll=&iMinCurWaitlist=&iMaxCurWaitlist=&Submit=Search+for+Classes"
     response = requests.get(url)
     soup = BeautifulSoup(response.content, 'html.parser')
-    
-    # Clicking the search button 
-    search_button = soup.find('input', {'type': 'submit', 'value': 'Search for Classes'})
-    if search_button:
-        print("Search button found")
-        
-        # DEBUG: Print the form's HTML and all input fields
-        form = soup.find('form')
-        if form:
-            print('Form HTML:', form.prettify())
-            for inp in form.find_all('input'):
-                print(f"Input: name={inp.get('name')}, value={inp.get('value')}, type={inp.get('type')}")
-        else:
-            print('No form found!')
-        
-        # DEBUG: Print all <a> tags' text and href
-        for a in soup.find_all('a'):
-            print(f"A tag: text='{a.text.strip()}', href='{a.get('href', '')}'")
-        
-        # Find all <a> tags that contain a 5-digit number as text
-        links = soup.find_all("a", string=re.compile(r"^\d{5}$"))
 
-        # Extract and print the full URLs
-        base_url = "https://louslist.org/sectiontip.php?Semester=1258&ClassNumber="
+    print(f"Fetched Lou's List all-classes page for semester {term}")
+    print(f"Response URL: {response.url}")
+    print(f"Response status: {response.status_code}")
 
-        for link in links:
-            class_number = link.text.strip()
-            url = base_url + class_number
-            print(url)
-    else:
-        print("Search button not found")
-        return
-    
-    class_regex = r'[A-Z]{3,4}\d{4}'
-    # unique_classes = set()
-    
-    results = {}  # Changed to dictionary to store class_id -> five_digit_numbers mapping
-    for tag in soup.find_all(class_=True):
-        class_str = ' '.join(tag.get('class'))
-        match = re.search(r'\b([A-Z]{2,}\d{4})\b', class_str)
-        if match:
-            class_id = match.group(1)
-            print(class_id)
-            if class_id in results:
-                continue
-            
-            five_digit_numbers = []
-            for a in tag.find_all('a'):
-                numbers = re.findall(r'\b\d{5}\b', a.text)
-                five_digit_numbers.extend(numbers)
-            if five_digit_numbers:
-                results[class_id] = five_digit_numbers  # Store as key-value pair
-                print(f"{class_id}: {five_digit_numbers}")
-            else:
-                print(f"No five-digit numbers found for {class_id}")
-        else:
-            continue
-    
-    return results
+    # Find all <a> tags that contain a 5-digit number as text
+    links = soup.find_all("a", string=re.compile(r"^\d{5}$"))
+    print(f"Found {len(links)} course links with 5-digit numbers")
+
+    # Extract and print the full URLs
+    base_url = f"https://louslist.org/sectiontip.php?Semester={term}&ClassNumber="
+    course_urls = []
+    for link in links:
+        class_number = link.text.strip()
+        url = base_url + class_number
+        course_urls.append(url)
+        print(f"Course URL: {url}")
+
+    # Optionally, save a sample of the HTML for debugging
+    with open('debug_page.html', 'w', encoding='utf-8') as f:
+        f.write(soup.prettify())
+    print("Saved page HTML to debug_page.html for inspection")
+
+    return course_urls
+
+
+
+def scrape_prereqs(client, course_urls):
+
+    #to insert into the table called "courses"
+    sis_ids_and_likks = {
+        
+        "sis_id":
+    }
+
+    #get the course number from the urlsupabase
+    for url in course_urls:
+        regex = r"^(\d{5})"
+        response = requests.get(url)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        print(soup.prettify())
+
+
 
 if __name__ == "__main__":
     # Load .env from the project root directory
     project_root = Path(__file__).parent.parent.parent.parent
     load_dotenv(project_root / ".env")
-    
+
     # Temporarily comment out Supabase client to test URL printing
     # supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 
-    course_data = scrape_all_courses(None)  # Pass None instead of supabase client
+    urls = scrap_course_links(None)
+    print(f"\nTotal course URLs found: {len(urls)}")
 
