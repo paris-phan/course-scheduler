@@ -35,7 +35,7 @@ class DataFetcher:
 
     def get_base_url(self):
         return f"https://sisuva.admin.virginia.edu/psc/ihprd/UVSS/SA/s/WEBLIB_HCX_CM.H_CLASS_SEARCH.FieldFormula.IScript_ClassSearch?institution=UVA01&term={self.strm}"
-
+                           
 
     async def fetch_courses(self, session, page, max_retries=8):
         url = self.get_base_url() + f"&page={page}"
@@ -114,7 +114,7 @@ class DataFetcher:
                     
                     if len(response_data.get("classes", [])) == 0 or response_data == "{'pageCount': 0, 'classes': []}":
                         in_progress = False
-                        print(f"Page {page} had no results, setting in_progress = False")
+                        print(f"Page {page} had no results, setting in_progress=False")
                         break
                     else:
                         data = response_data["classes"]
@@ -175,10 +175,10 @@ class DataFetcher:
             # Insert into Supabase
             self.supabase.table(self.table_name).insert(course_record).execute()
             print(f"Inserted: {course_record['subject']} {course_record['catalog_nbr']} - {course_record['class_section']}")
-            
+                                       
         except Exception as e:
             print(f"Error inserting course {course_data.get('subject', '')} {course_data.get('catalog_nbr', '')}: {e}")
-
+                           
 
     def run(self):
 
