@@ -180,4 +180,3 @@ if __name__ == "__main__":
     supabase: Client = create_client(url, key)
     urls = scrap_course_links(supabase, 1258)
     scrape_prereqs(supabase, urls)
-
