@@ -6,13 +6,14 @@ from supabase import create_client, Client
 from dotenv import load_dotenv
 import time
 import random
+import json
 # import pickle
 
 # currently need to make sure num_pages_in_batch is greater than number of pages in SIS, cuz SIS rate limits after one iteration leading to a request timeout
 # there's probably a better way to get around this
 
 class DataFetcher:
-    def __init__(self, path_to_db, table_name, strm, num_pages_in_batch=150):
+    def __init__(self, table_name, strm, num_pages_in_batch=150, start_page=1):
         # Load environment variables for Supabase connection
         load_dotenv()
         
@@ -28,6 +29,7 @@ class DataFetcher:
         self.table_name = table_name
         self.strm = strm
         self.num_pages_in_batch = num_pages_in_batch
+        self.start_page = start_page
         self.courses = []
 
 
@@ -35,7 +37,7 @@ class DataFetcher:
         return f"https://sisuva.admin.virginia.edu/psc/ihprd/UVSS/SA/s/WEBLIB_HCX_CM.H_CLASS_SEARCH.FieldFormula.IScript_ClassSearch?institution=UVA01&term={self.strm}"
 
 
-    async def fetch_courses(self, session, page, max_retries=3):
+    async def fetch_courses(self, session, page, max_retries=8):
         url = self.get_base_url() + f"&page={page}"
         print(f"Fetching data for page {page}")
         
@@ -93,13 +95,16 @@ class DataFetcher:
 
     async def get_all_courses_in_semester(self):
         # Use a smaller batch size to avoid rate limiting
-        batch_size = min(self.num_pages_in_batch, 50)  # Limit batch size
+        batch_size = self.num_pages_in_batch # which is 150 
         
         async with aiohttp.ClientSession() as session:
             in_progress = True
             iteration = 0
+            page_count = 0
+            courses_in_batch = []
+            
             while in_progress:
-                start_page = 1 + iteration * batch_size
+                start_page = self.start_page + iteration * batch_size
                 end_page = batch_size + start_page
                 print(f"Fetching pages {start_page} to {end_page}")
                 
@@ -107,14 +112,23 @@ class DataFetcher:
                 for page in range(start_page, end_page):
                     response_data = await self.fetch_courses(session, page)
                     
-                    if len(response_data.get("classes", [])) == 0:
+                    if len(response_data.get("classes", [])) == 0 or response_data == "{'pageCount': 0, 'classes': []}":
                         in_progress = False
                         print(f"Page {page} had no results, setting in_progress = False")
                         break
                     else:
                         data = response_data["classes"]
                         for course in data:
-                            self.courses.append(course)
+                            courses_in_batch.append(course)
+                        
+                        page_count += 1
+                        
+                        # Insert every 5 pages processed
+                        if page_count % 5 == 0:
+                            print(f"Inserting batch of {len(courses_in_batch)} courses from pages {start_page} to {page}")
+                            for course in courses_in_batch:
+                                self.insert_course_into_supabase(course)
+                            courses_in_batch = []  # Clear the batch
                 
                 # Add delay between batches
                 if in_progress:
@@ -123,8 +137,14 @@ class DataFetcher:
                 
                 iteration += 1
             
+            # Insert any remaining courses
+            if courses_in_batch:
+                print(f"Inserting final batch of {len(courses_in_batch)} courses")
+                for course in courses_in_batch:
+                    self.insert_course_into_supabase(course)
+            
             print("Done fetching data from SIS")
-    
+
 
     def insert_course_into_supabase(self, course_data):
         """Insert a single course into Supabase"""
@@ -148,8 +168,8 @@ class DataFetcher:
                 "class_capacity": course_data.get("class_capacity", 0),
                 "wait_tot": course_data.get("wait_tot", 0),
                 "wait_cap": course_data.get("wait_cap", 0),
-                "meetings": str(course_data.get("meetings", [])),  # Convert to string for storage
-                "instructors": str(course_data.get("instructors", [])),  # Convert to string for storage
+                "meetings": json.dumps(course_data.get("meetings", [])),  # Proper JSON serialization
+                "instructors": json.dumps(course_data.get("instructors", [])),  # Proper JSON serialization
             }
             
             # Insert into Supabase
@@ -161,27 +181,10 @@ class DataFetcher:
 
 
     def run(self):
-        # fetch data from SIS
+
+        # fetch data from SIS and insert as we go
         loop = asyncio.get_event_loop()
         loop.run_until_complete(self.get_all_courses_in_semester())
         loop.close()
 
-        # with open("sis_data.pkl", "rb") as f:
-        #     self.courses = pickle.load(f)
-        
-        print(f"Processing {len(self.courses)} courses...")
-        
-        # Clear existing data for this semester (optional - comment out if you want to keep existing data)
-        try:
-            self.supabase.table(self.table_name).delete().eq("strm", self.strm).execute()
-            print(f"Cleared existing data for semester {self.strm}")
-        except Exception as e:
-            print(f"Warning: Could not clear existing data: {e}")
-        
-        # Insert each course into Supabase
-        for i, course in enumerate(self.courses):
-            if i % 100 == 0:  # Progress indicator
-                print(f"Processing course {i+1}/{len(self.courses)}")
-            self.insert_course_into_supabase(course)
-        
-        print(f"Successfully inserted {len(self.courses)} courses into Supabase")
+        print("Successfully completed data fetch and insertion")

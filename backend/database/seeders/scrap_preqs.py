@@ -86,22 +86,47 @@ def scrape_prereqs(client, course_urls):
 
                 response = requests.get(url)
                 soup = BeautifulSoup(response.content, 'html.parser')
-                html = soup.decode()
+                html = str(soup)
 
                 enroll_match = re.search(r'Enrollment Requirements:</td>\s*<td>\s*(.*?)\s*</td>', html, re.DOTALL)
                 components_match = re.search(r'Class Components:</td>\s*<td>\s*(.*?)\s*</td>', html, re.DOTALL)
                 sis_desc_match = re.search(r'<em>SIS Description:\s*</em>\s*(.*?)\s*</td>', html, re.DOTALL)
                 
+                #Join record regex
+                subject = None
+                catalog_nbr = None
+                class_section = None
+
+                join_match = re.search(r"<title>\s*([A-Z]{2,4})\s+(\d{4})\s+(\d{2,3})\s+-.*?", html )
+                if join_match:
+                    subject = join_match.group(1) # example : "AAS" , "MATH", "CS"
+                    catalog_nbr = join_match.group(2) # example : "3140" , "4501"
+                    class_section = join_match.group(3) # example : "1000" , "02"
+
+                    # Query the database to get the id where subject, catalog_nbr, and class_section match
+                    primary_id = None
+                    try:
+                        result = client.table("courses").select("id").eq("subject", subject).eq("catalog_nbr", catalog_nbr).eq("class_section", class_section).limit(1).execute()
+                        if result.data and len(result.data) > 0:
+                            primary_id = result.data[0]["id"]
+
+                    except Exception as e:
+                        print(f"Error fetching id from database for {subject} {catalog_nbr} {class_section}: {e}")
+
                 # Create a record for this course
-                course_record = {
-                    "sis_id": classNumber_int,
-                    "description_link": url,
-                    "enrollment_requirements": enroll_match.group(1).strip() if enroll_match else None,
-                    "class_components": components_match.group(1).strip() if components_match else None,
-                    "sis_description": sis_desc_match.group(1).strip() if sis_desc_match else None
-                }
+                if subject and catalog_nbr and class_section and primary_id is not None:
+                    course_record = {
+                        "id": primary_id, 
+                        "sis_id": classNumber_int,
+                        "description_link": url,
+                        "enrollment_requirements": enroll_match.group(1).strip() if enroll_match else None,
+                        "class_components": components_match.group(1).strip() if components_match else None,
+                        "sis_description": sis_desc_match.group(1).strip() if sis_desc_match else None
+                    }
+                    batch_records.append(course_record)
+                else:
+                    print(f"Skipping course {subject} {catalog_nbr} {class_section} due to missing id")
                 
-                batch_records.append(course_record)
                 
             except ValueError as e:
                 print(f"Error: Invalid class number format in URL {url}: {e}")
@@ -111,15 +136,26 @@ def scrape_prereqs(client, course_urls):
                 continue
         
         # Insert the batch of records
+        max_retries = 3
+        retry_delay = 3  # seconds
+
         if batch_records:
-            try:
-                print(f"  Inserting {batch_records} records into database...")
-                response = client.table("courses").insert(batch_records).execute()
-                print(f"  Successfully inserted batch {batch_start // batch_size + 1}")
-            except postgrest.APIError as e:
-                print(f"Database error: {e}")
-                print(f"Batch records preview: {batch_records[:2]}")  # Show first 2 records
-        
+            for attempt in range(1, max_retries + 1):
+                try:
+                    response = client.table("courses").upsert(
+                        batch_records, 
+                        on_conflict = ["id"]
+                    ).execute()
+                    print(f"  Successfully inserted batch {batch_start // batch_size + 1}")
+                    break  # Success, exit the retry loop
+                except postgrest.APIError as e:
+                    print(f"Database error (attempt {attempt}): {e}")
+                    if attempt == max_retries:
+                        print(f"Failed after {max_retries} attempts. Batch records preview: {batch_records[:2]}")
+                        return
+                    print(f"Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+
         # Add delay between batches
         if batch_end < len(course_urls):
             print("  Waiting 2 seconds before next batch...")
@@ -144,4 +180,3 @@ if __name__ == "__main__":
     supabase: Client = create_client(url, key)
     urls = scrap_course_links(supabase, 1258)
     scrape_prereqs(supabase, urls)
-
