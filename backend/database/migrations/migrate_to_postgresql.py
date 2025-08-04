@@ -45,13 +45,34 @@ class SISDataMigrator:
         return True
 
     def test_database_connection(self) -> bool:
-        """Test database connection before starting migration"""
+        """Test database connection and check if schema exists"""
         print("Testing database connection...")
-        if self.db_client.test_connection():
-            print("✓ Database connection successful")
-            return True
-        else:
+        if not self.db_client.test_connection():
             print("✗ Database connection failed")
+            return False
+        
+        print("✓ Database connection successful")
+        
+        # Check if required tables exist
+        try:
+            result = self.db_client.execute_query(
+                "SELECT COUNT(*) as count FROM information_schema.tables WHERE table_name = :table_name",
+                {'table_name': 'terms'},
+                fetch=True
+            )
+            
+            if result[0]['count'] == 0:
+                print("⚠ Database schema not found. Please create the schema first:")
+                print("1. Connect to your Cloud SQL instance")
+                print("2. Run the SQL schema from artifacts/CloudSQL.md")
+                print("3. Then run this migration script again")
+                return False
+            else:
+                print("✓ Database schema exists")
+                return True
+                
+        except Exception as e:
+            print(f"✗ Error checking database schema: {e}")
             return False
 
     def parse_units(self, units_str: str) -> tuple:
@@ -355,7 +376,9 @@ class SISDataMigrator:
         
         if self.stats['errors']:
             print("\nErrors:")
-            for error in self.stats['errors'][-10]:  # Show last 10 errors
+            # Safely handle the case where there are fewer than 10 errors
+            error_count = min(10, len(self.stats['errors']))
+            for error in self.stats['errors'][-error_count:]:
                 print(f"  - {error}")
             if len(self.stats['errors']) > 10:
                 print(f"  ... and {len(self.stats['errors']) - 10} more errors")

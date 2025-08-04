@@ -76,11 +76,20 @@ class PostgreSQLClient:
 
     def execute_query(self, query: str, params: Dict = None, fetch: bool = False) -> Optional[List[Dict]]:
         """Execute a query and optionally fetch results"""
-        with self.get_connection() as conn:
-            result = conn.execute(text(query), params or {})
-            if fetch:
-                return [dict(row._mapping) for row in result]
-            return None
+        try:
+            with self.get_connection() as conn:
+                result = conn.execute(text(query), params or {})
+                if fetch:
+                    rows = [dict(row._mapping) for row in result]
+                    if not rows:
+                        raise ValueError("Query returned no results")
+                    return rows
+                return None
+        except Exception as e:
+            print(f"Query execution failed: {e}")
+            print(f"Query: {query}")
+            print(f"Params: {params}")
+            raise
 
     def create_hash(self, data: Dict) -> str:
         """Create a hash for data integrity checking"""
