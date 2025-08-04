@@ -62,7 +62,7 @@ class SISDataMigrator:
         try:
             # Handle range format like "3-4" or single values like "3"
             if '-' in units_str:
-                min_units, max_units = units_str.split '-', 2)
+                min_units, max_units = units_str.split( '-', 2)
                 return float(min_units.strip()), float(max_units.strip())
             else:
                 units = float(units_str)
