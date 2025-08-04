@@ -303,40 +303,46 @@ class SISDataMigrator:
         """Run the full migration process"""
         print("=== SIS Data Migration to PostgreSQL ===\n")
         
-        # Validate prerequisites
-        if not self.validate_data_directory():
-            return False
-            
-        if not self.test_database_connection():
-            return False
-        
-        # Get semester directories to process
-        semester_dirs = [d for d in self.data_directory.iterdir() 
-                        if d.is_dir() and d.name.isdigit() and len(d.name) == 4]
-        
-        # Filter by semester if specified
-        if semester_filter:
-            semester_dirs = [d for d in semester_dirs if d.name == semester_filter]
-            if not semester_dirs:
-                print(f"Error: Semester '{semester_filter}' not found")
+        try:
+            # Validate prerequisites
+            if not self.validate_data_directory():
                 return False
-        
-        # Sort semesters chronologically
-        semester_dirs.sort(key=lambda x: x.name)
-        
-        print(f"Processing {len(semester_dirs)} semesters...")
-        
-        # Process each semester
-        success = True
-        for semester_dir in semester_dirs:
-            if not self.process_semester(semester_dir):
-                success = False
-                # Continue with other semesters even if one fails
-        
-        # Print final statistics
-        self.print_migration_stats()
-        
-        return success
+                
+            if not self.test_database_connection():
+                return False
+            
+            # Get semester directories to process
+            semester_dirs = [d for d in self.data_directory.iterdir() 
+                            if d.is_dir() and d.name.isdigit() and len(d.name) == 4]
+            
+            # Filter by semester if specified
+            if semester_filter:
+                semester_dirs = [d for d in semester_dirs if d.name == semester_filter]
+                if not semester_dirs:
+                    print(f"Error: Semester '{semester_filter}' not found")
+                    return False
+            
+            # Sort semesters chronologically
+            semester_dirs.sort(key=lambda x: x.name)
+            
+            print(f"Processing {len(semester_dirs)} semesters...")
+            
+            # Process each semester
+            success = True
+            for semester_dir in semester_dirs:
+                if not self.process_semester(semester_dir):
+                    success = False
+                    # Continue with other semesters even if one fails
+            
+            # Print final statistics
+            self.print_migration_stats()
+            
+            return success
+            
+        finally:
+            # Clean up database connection
+            if hasattr(self.db_client, 'close'):
+                self.db_client.close()
 
     def print_migration_stats(self):
         """Print migration statistics"""

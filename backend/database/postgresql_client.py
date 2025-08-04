@@ -1,6 +1,9 @@
 import os
-import psycopg2
-from psycopg2.extras import RealDictCursor
+from google.cloud.sql.connector import Connector
+import pg8000
+import sqlalchemy
+from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool
 from dotenv import load_dotenv
 from contextlib import contextmanager
 import hashlib
@@ -12,42 +15,72 @@ class PostgreSQLClient:
     def __init__(self):
         load_dotenv()
         
-        self.connection_params = {
-            'host': os.environ.get('POSTGRES_HOST'),
-            'port': os.environ.get('POSTGRES_PORT', 5432),
-            'database': os.environ.get('POSTGRES_DB'),
-            'user': os.environ.get('POSTGRES_USER'),
-            'password': os.environ.get('POSTGRES_PASSWORD'),
-        }
+        self.connection_name = os.environ.get('CLOUD_SQL_CONNECTION_NAME')
+        self.db_user = os.environ.get('POSTGRES_USER')
+        self.db_password = os.environ.get('POSTGRES_PASSWORD')
+        self.db_name = os.environ.get('POSTGRES_DB')
+        self.project_id = os.environ.get('GOOGLE_CLOUD_PROJECT')
         
-        if not all([self.connection_params['host'], self.connection_params['database'], 
-                   self.connection_params['user'], self.connection_params['password']]):
-            raise ValueError("Missing required PostgreSQL environment variables")
+        if not all([self.connection_name, self.db_user, self.db_password, self.db_name]):
+            raise ValueError("Missing required Cloud SQL environment variables: CLOUD_SQL_CONNECTION_NAME, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB")
+        
+        # Initialize the Cloud SQL connector
+        self.connector = Connector()
+        
+        # Create connection pool
+        self.engine = self._create_engine()
+
+    def _create_engine(self):
+        """Create SQLAlchemy engine with Cloud SQL connector"""
+        def getconn():
+            try:
+                conn = self.connector.connect(
+                    self.connection_name,
+                    "pg8000",
+                    user=self.db_user,
+                    password=self.db_password,
+                    db=self.db_name
+                )
+                return conn
+            except Exception as e:
+                print(f"Failed to create Cloud SQL connection: {e}")
+                raise
+        
+        # Create connection pool
+        engine = create_engine(
+            "postgresql+pg8000://",
+            creator=getconn,
+            poolclass=NullPool,  # Disable connection pooling for Cloud SQL connector
+            echo=False,  # Set to True for SQL debugging
+        )
+        
+        return engine
 
     @contextmanager
     def get_connection(self):
         """Context manager for database connections"""
         conn = None
+        trans = None
         try:
-            conn = psycopg2.connect(**self.connection_params)
+            conn = self.engine.connect()
+            trans = conn.begin()
             yield conn
+            trans.commit()
         except Exception as e:
-            if conn:
-                conn.rollback()
+            if trans:
+                trans.rollback()
             raise e
         finally:
             if conn:
                 conn.close()
 
-    def execute_query(self, query: str, params: tuple = None, fetch: bool = False) -> Optional[List[Dict]]:
+    def execute_query(self, query: str, params: Dict = None, fetch: bool = False) -> Optional[List[Dict]]:
         """Execute a query and optionally fetch results"""
         with self.get_connection() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute(query, params)
-                if fetch:
-                    return [dict(row) for row in cursor.fetchall()]
-                conn.commit()
-                return None
+            result = conn.execute(text(query), params or {})
+            if fetch:
+                return [dict(row._mapping) for row in result]
+            return None
 
     def create_hash(self, data: Dict) -> str:
         """Create a hash for data integrity checking"""
@@ -60,7 +93,7 @@ class PostgreSQLClient:
         
         query = """
         INSERT INTO terms (code, name, start_date, end_date, session, source_hash)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        VALUES (:code, :name, :start_date, :end_date, :session, :source_hash)
         ON CONFLICT (code) DO UPDATE SET
             name = EXCLUDED.name,
             start_date = EXCLUDED.start_date,
@@ -71,7 +104,16 @@ class PostgreSQLClient:
         RETURNING id
         """
         
-        result = self.execute_query(query, (code, name, start_date, end_date, session, source_hash), fetch=True)
+        params = {
+            'code': code,
+            'name': name,
+            'start_date': start_date,
+            'end_date': end_date,
+            'session': session,
+            'source_hash': source_hash
+        }
+        
+        result = self.execute_query(query, params, fetch=True)
         return result[0]['id']
 
     def upsert_course_catalog(self, subject: str, catalog_number: str, title: str, 
@@ -87,8 +129,8 @@ class PostgreSQLClient:
         
         query = """
         INSERT INTO course_catalog (subject, catalog_number, title, description, min_credits, max_credits, attributes, source_hash)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (subject, catalog_number, effective_start) DO UPDATE SET
+        VALUES (:subject, :catalog_number, :title, :description, :min_credits, :max_credits, :attributes, :source_hash)
+        ON CONFLICT (subject, catalog_number, COALESCE(effective_start, '1900-01-01'::date)) DO UPDATE SET
             title = EXCLUDED.title,
             description = EXCLUDED.description,
             min_credits = EXCLUDED.min_credits,
@@ -99,10 +141,18 @@ class PostgreSQLClient:
         RETURNING id
         """
         
-        result = self.execute_query(query, (
-            subject, catalog_number, title, description, 
-            min_credits, max_credits, json.dumps(attributes) if attributes else None, source_hash
-        ), fetch=True)
+        params = {
+            'subject': subject,
+            'catalog_number': catalog_number,
+            'title': title,
+            'description': description,
+            'min_credits': min_credits,
+            'max_credits': max_credits,
+            'attributes': json.dumps(attributes) if attributes else None,
+            'source_hash': source_hash
+        }
+        
+        result = self.execute_query(query, params, fetch=True)
         return result[0]['id']
 
     def upsert_course_offering(self, term_id: int, catalog_id: int, topic: str = None, 
@@ -115,18 +165,41 @@ class PostgreSQLClient:
             'grading_basis': grading_basis
         })
         
+        # Since we don't have sis_offering_id, use term_id + catalog_id for uniqueness
         query = """
-        INSERT INTO course_offerings (term_id, catalog_id, topic, grading_basis, source_hash)
-        VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT (sis_offering_id) DO UPDATE SET
-            topic = EXCLUDED.topic,
-            grading_basis = EXCLUDED.grading_basis,
-            source_hash = EXCLUDED.source_hash,
-            updated_at = NOW()
-        RETURNING id
+        WITH existing AS (
+            SELECT id FROM course_offerings 
+            WHERE term_id = :term_id AND catalog_id = :catalog_id
+            LIMIT 1
+        ),
+        inserted AS (
+            INSERT INTO course_offerings (term_id, catalog_id, topic, grading_basis, source_hash)
+            SELECT :term_id, :catalog_id, :topic, :grading_basis, :source_hash
+            WHERE NOT EXISTS (SELECT 1 FROM existing)
+            RETURNING id
+        ),
+        updated AS (
+            UPDATE course_offerings SET
+                topic = :topic,
+                grading_basis = :grading_basis,
+                source_hash = :source_hash,
+                updated_at = NOW()
+            WHERE term_id = :term_id AND catalog_id = :catalog_id
+            AND EXISTS (SELECT 1 FROM existing)
+            RETURNING id
+        )
+        SELECT id FROM inserted UNION ALL SELECT id FROM updated UNION ALL SELECT id FROM existing
         """
         
-        result = self.execute_query(query, (term_id, catalog_id, topic, grading_basis, source_hash), fetch=True)
+        params = {
+            'term_id': term_id,
+            'catalog_id': catalog_id,
+            'topic': topic,
+            'grading_basis': grading_basis,
+            'source_hash': source_hash
+        }
+        
+        result = self.execute_query(query, params, fetch=True)
         return result[0]['id']
 
     def upsert_section(self, offering_id: int, component: str, section_number: str,
@@ -142,7 +215,7 @@ class PostgreSQLClient:
         
         query = """
         INSERT INTO sections (offering_id, component, section_number, class_nbr, total_seats, waitlist_capacity, status, source_hash)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (:offering_id, :component, :section_number, :class_nbr, :total_seats, :waitlist_capacity, :status, :source_hash)
         ON CONFLICT (offering_id, section_number) DO UPDATE SET
             component = EXCLUDED.component,
             class_nbr = EXCLUDED.class_nbr,
@@ -154,10 +227,18 @@ class PostgreSQLClient:
         RETURNING id
         """
         
-        result = self.execute_query(query, (
-            offering_id, component, section_number, class_nbr, 
-            total_seats, waitlist_capacity, status, source_hash
-        ), fetch=True)
+        params = {
+            'offering_id': offering_id,
+            'component': component,
+            'section_number': section_number,
+            'class_nbr': class_nbr,
+            'total_seats': total_seats,
+            'waitlist_capacity': waitlist_capacity,
+            'status': status,
+            'source_hash': source_hash
+        }
+        
+        result = self.execute_query(query, params, fetch=True)
         return result[0]['id']
 
     def insert_meeting_pattern(self, section_id: int, day_mask: str = None, 
@@ -167,10 +248,20 @@ class PostgreSQLClient:
         """Insert a meeting pattern for a section"""
         query = """
         INSERT INTO meeting_patterns (section_id, day_mask, start_time, end_time, start_date, end_date, location)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        VALUES (:section_id, :day_mask, :start_time, :end_time, :start_date, :end_date, :location)
         """
         
-        self.execute_query(query, (section_id, day_mask, start_time, end_time, start_date, end_date, location))
+        params = {
+            'section_id': section_id,
+            'day_mask': day_mask,
+            'start_time': start_time,
+            'end_time': end_time,
+            'start_date': start_date,
+            'end_date': end_date,
+            'location': location
+        }
+        
+        self.execute_query(query, params)
 
     def insert_section_snapshot(self, section_id: int, seats_avail: int = None, 
                                waitlist_avail: int = None, captured_at: datetime = None):
@@ -180,25 +271,37 @@ class PostgreSQLClient:
             
         query = """
         INSERT INTO section_snapshots (section_id, captured_at, seats_avail, waitlist_avail)
-        VALUES (%s, %s, %s, %s)
+        VALUES (:section_id, :captured_at, :seats_avail, :waitlist_avail)
         ON CONFLICT (section_id, captured_at) DO UPDATE SET
             seats_avail = EXCLUDED.seats_avail,
             waitlist_avail = EXCLUDED.waitlist_avail
         """
         
-        self.execute_query(query, (section_id, captured_at, seats_avail, waitlist_avail))
+        params = {
+            'section_id': section_id,
+            'captured_at': captured_at,
+            'seats_avail': seats_avail,
+            'waitlist_avail': waitlist_avail
+        }
+        
+        self.execute_query(query, params)
 
     def get_or_create_catalog_id(self, subject: str, catalog_number: str) -> Optional[int]:
         """Get existing catalog ID or return None if not found"""
         query = """
         SELECT id FROM course_catalog 
-        WHERE subject = %s AND catalog_number = %s 
+        WHERE subject = :subject AND catalog_number = :catalog_number 
         AND (effective_end IS NULL OR effective_end > NOW())
-        ORDER BY effective_start DESC
+        ORDER BY effective_start DESC NULLS LAST
         LIMIT 1
         """
         
-        result = self.execute_query(query, (subject, catalog_number), fetch=True)
+        params = {
+            'subject': subject,
+            'catalog_number': catalog_number
+        }
+        
+        result = self.execute_query(query, params, fetch=True)
         return result[0]['id'] if result else None
 
     def parse_day_mask(self, days_str: str) -> str:
@@ -244,9 +347,21 @@ class PostgreSQLClient:
         """Test database connection"""
         try:
             with self.get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute("SELECT 1")
-                    return True
+                result = conn.execute(text("SELECT 1"))
+                return True
         except Exception as e:
             print(f"Connection test failed: {e}")
             return False
+
+    def close(self):
+        """Close the Cloud SQL connector"""
+        if hasattr(self, 'connector'):
+            self.connector.close()
+
+    def get_pool_status(self) -> Dict[str, Any]:
+        """Get connection pool status for monitoring"""
+        return {
+            'engine_url': str(self.engine.url),
+            'pool_class': str(type(self.engine.pool)),
+            'connection_name': self.connection_name
+        }

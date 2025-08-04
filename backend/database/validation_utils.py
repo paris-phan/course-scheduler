@@ -272,50 +272,56 @@ class DataValidator:
         """Run all validation checks"""
         print("=== Running Complete Data Validation ===\n")
         
-        all_passed = True
-        
-        # Test database connection
-        if not self.db_client.test_connection():
-            print("✗ Database connection failed")
-            return False
-        
-        # Run validation checks
-        checks = [
-            ("Database Schema", self.validate_database_schema),
-            ("Data Integrity", self.validate_data_integrity),
-            ("Data Completeness", self.validate_course_data_completeness)
-        ]
-        
-        for check_name, check_function in checks:
-            print(f"\n--- {check_name} ---")
-            if not check_function():
-                all_passed = False
-        
-        # Compare with JSON data if directory provided
-        if json_data_dir:
-            print(f"\n--- JSON Comparison ---")
-            comparison = self.compare_with_json_data(json_data_dir)
-            if 'error' in comparison:
-                print(f"✗ {comparison['error']}")
-                all_passed = False
-            else:
-                print(f"JSON Stats: {comparison['json_stats']}")
-                print(f"DB Stats: {comparison['db_stats']}")
-                if comparison['discrepancies']:
-                    print("Discrepancies found:")
-                    for discrepancy in comparison['discrepancies']:
-                        print(f"  - {discrepancy}")
+        try:
+            all_passed = True
+            
+            # Test database connection
+            if not self.db_client.test_connection():
+                print("✗ Database connection failed")
+                return False
+            
+            # Run validation checks
+            checks = [
+                ("Database Schema", self.validate_database_schema),
+                ("Data Integrity", self.validate_data_integrity),
+                ("Data Completeness", self.validate_course_data_completeness)
+            ]
+            
+            for check_name, check_function in checks:
+                print(f"\n--- {check_name} ---")
+                if not check_function():
+                    all_passed = False
+            
+            # Compare with JSON data if directory provided
+            if json_data_dir:
+                print(f"\n--- JSON Comparison ---")
+                comparison = self.compare_with_json_data(json_data_dir)
+                if 'error' in comparison:
+                    print(f"✗ {comparison['error']}")
                     all_passed = False
                 else:
-                    print("✓ Data counts match within acceptable range")
-        
-        # Print database statistics
-        print(f"\n--- Database Statistics ---")
-        stats = self.get_database_statistics()
-        for stat_name, count in stats.items():
-            print(f"{stat_name.capitalize()}: {count:,}")
-        
-        return all_passed
+                    print(f"JSON Stats: {comparison['json_stats']}")
+                    print(f"DB Stats: {comparison['db_stats']}")
+                    if comparison['discrepancies']:
+                        print("Discrepancies found:")
+                        for discrepancy in comparison['discrepancies']:
+                            print(f"  - {discrepancy}")
+                        all_passed = False
+                    else:
+                        print("✓ Data counts match within acceptable range")
+            
+            # Print database statistics
+            print(f"\n--- Database Statistics ---")
+            stats = self.get_database_statistics()
+            for stat_name, count in stats.items():
+                print(f"{stat_name.capitalize()}: {count:,}")
+            
+            return all_passed
+            
+        finally:
+            # Clean up database connection
+            if hasattr(self.db_client, 'close'):
+                self.db_client.close()
 
     def print_validation_summary(self):
         """Print a summary of all validation results"""

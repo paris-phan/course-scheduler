@@ -414,6 +414,10 @@ class PostgreSQLDataFetcher:
         except Exception as e:
             print(f"\n✗ Data fetch failed: {e}")
             return False
+        finally:
+            # Clean up database connection
+            if hasattr(self.db_client, 'close'):
+                self.db_client.close()
 
 def main():
     """Main entry point for running the PostgreSQL data fetcher"""
