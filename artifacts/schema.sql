@@ -9,6 +9,7 @@ CREATE TABLE terms (
   start_date   DATE,
   end_date     DATE,
   session      VARCHAR,                     -- 'Regular', 'Summer 1', etc.
+  source_hash  VARCHAR,                     -- for idempotent upserts
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

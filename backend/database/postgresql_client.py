@@ -136,10 +136,13 @@ class PostgreSQLClient:
             'description': description
         })
         
+        # Set default effective_start if not provided to match the constraint
+        effective_start = '1900-01-01'
+        
         query = """
-        INSERT INTO course_catalog (subject, catalog_number, title, description, min_credits, max_credits, attributes, source_hash)
-        VALUES (:subject, :catalog_number, :title, :description, :min_credits, :max_credits, :attributes, :source_hash)
-        ON CONFLICT (subject, catalog_number, COALESCE(effective_start, '1900-01-01'::date)) DO UPDATE SET
+        INSERT INTO course_catalog (subject, catalog_number, title, description, min_credits, max_credits, attributes, source_hash, effective_start)
+        VALUES (:subject, :catalog_number, :title, :description, :min_credits, :max_credits, :attributes, :source_hash, :effective_start)
+        ON CONFLICT (subject, catalog_number, effective_start) DO UPDATE SET
             title = EXCLUDED.title,
             description = EXCLUDED.description,
             min_credits = EXCLUDED.min_credits,
@@ -158,7 +161,8 @@ class PostgreSQLClient:
             'min_credits': min_credits,
             'max_credits': max_credits,
             'attributes': json.dumps(attributes) if attributes else None,
-            'source_hash': source_hash
+            'source_hash': source_hash,
+            'effective_start': effective_start
         }
         
         result = self.execute_query(query, params, fetch=True)
