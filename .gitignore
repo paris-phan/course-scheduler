@@ -199,3 +199,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+#claudes
+claude/
+CLAUDE.local.md
+CLAUDE.md
